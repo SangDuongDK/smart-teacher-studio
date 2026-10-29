@@ -1,0 +1,344 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// 1. CÁC KIỂU LIỆT KÊ (ENUMS)
+// ==========================================
+
+enum Role {
+  TEACHER
+  REVIEWER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  LOCKED
+}
+
+enum LessonStatus {
+  DRAFT
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+  PUBLISHED
+}
+
+enum SyncStatus {
+  NONE
+  SYNCED
+  FAILED
+}
+
+enum ReviewAction {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum SkillType {
+  LISTENING
+  SPEAKING
+  READING
+  WRITING
+  MIXED
+}
+
+enum ExerciseType {
+  MULTIPLE_CHOICE
+  MATCHING
+  FILL_IN_BLANK
+  DRAG_DROP
+  REORDER_SENTENCE
+  REORDER_LETTERS
+  TRUE_FALSE
+  CROSSWORD
+  SPEAKING_PRACTICE
+  LISTENING_PRACTICE
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ExamType {
+  MINUTES_15   @map("15_MIN")
+  MID_TERM
+  FINAL_TERM
+  REVIEW
+}
+
+enum ShareScope {
+  INTERNAL
+  SUBJECT_GROUP
+  PUBLIC
+}
+
+enum AITaskStatus {
+  SUCCESS
+  FAILED
+}
+
+// ==========================================
+// 2. CÁC BẢNG DỮ LIỆU (MODELS)
+// ==========================================
+
+model User {
+  id           String        @id @default(uuid())
+  fullName     String        @map("full_name")
+  email        String        @unique
+  passwordHash String        @map("password_hash")
+  role         Role          @default(TEACHER)
+  status       AccountStatus @default(ACTIVE)
+  tokenVersion Int           @default(0) @map("token_version")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  // Quan hệ
+  authoredLessons Lesson[]          @relation("LessonAuthor")
+  createdVersions LessonVersion[]   @relation("VersionCreator")
+  reviews         LessonReview[]    @relation("Reviewer")
+  questions       Question[]
+  exams           Exam[]
+  resources       Resource[]
+  aiLogs          AIGenerationLog[]
+
+  @@map("users")
+}
+
+model Grade {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  topics    Topic[]
+  lessons   Lesson[]
+  exams     Exam[]
+  questions Question[]
+
+  @@map("grades")
+}
+
+model Topic {
+  id          String   @id @default(uuid())
+  gradeId     String   @map("grade_id")
+  unitName    String   @map("unit_name")
+  name        String
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  grade     Grade      @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  lessons   Lesson[]
+  exams     Exam[]
+  questions Question[]
+
+  @@map("topics")
+}
+
+model Lesson {
+  id               String       @id @default(uuid())
+  authorId         String       @map("author_id")
+  gradeId          String?      @map("grade_id")
+  topicId          String?      @map("topic_id")
+  title            String
+  primarySkill     SkillType    @map("primary_skill")
+  durationMinutes  Int          @default(45) @map("duration_minutes")
+  difficultyLevel  String?      @map("difficulty_level")
+  status           LessonStatus @default(DRAFT)
+  currentVersionId String?      @unique @map("current_version_id")
+  
+  isSharedLibrary  Boolean      @default(false) @map("is_shared_library")
+  lmsExternalId    String?      @map("lms_external_id")
+  syncStatus       SyncStatus   @default(NONE) @map("sync_status")
+  publishedAt      DateTime?    @map("published_at")
+  publishedBy      String?      @map("published_by")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Quan hệ
+  author          User             @relation("LessonAuthor", fields: [authorId], references: [id])
+  grade           Grade?           @relation(fields: [gradeId], references: [id])
+  topic           Topic?           @relation(fields: [topicId], references: [id])
+  currentVersion  LessonVersion?   @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  versions        LessonVersion[]  @relation("AllVersions")
+  reviews         LessonReview[]
+  questions       Question[]
+  lessonResources LessonResource[]
+
+  @@index([status])
+  @@index([authorId])
+  @@map("lessons")
+}
+
+model LessonVersion {
+  id            String   @id @default(uuid())
+  lessonId      String   @map("lesson_id")
+  versionNumber Int      @map("version_number")
+  content       Json
+  createdById   String   @map("created_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Quan hệ
+  lesson        Lesson         @relation("AllVersions", fields: [lessonId], references: [id], onDelete: Cascade)
+  createdBy     User           @relation("VersionCreator", fields: [createdById], references: [id])
+  currentLesson Lesson?        @relation("CurrentVersion")
+  reviews       LessonReview[]
+
+  @@unique([lessonId, versionNumber])
+  @@map("lesson_versions")
+}
+
+model LessonReview {
+  id         String       @id @default(uuid())
+  lessonId   String       @map("lesson_id")
+  versionId  String       @map("version_id")
+  reviewerId String       @map("reviewer_id")
+  action     ReviewAction
+  comment    String?      @db.Text
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  lesson   Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  version  LessonVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  reviewer User          @relation("Reviewer", fields: [reviewerId], references: [id])
+
+  @@map("lesson_reviews")
+}
+
+model Question {
+  id            String          @id @default(uuid())
+  type          ExerciseType
+  skill         SkillType       @default(READING)
+  difficulty    String          @default("MEDIUM") // Dùng String để tương thích hoàn toàn
+  content       String          @db.Text           // Đề bài / nội dung câu hỏi
+  options       Json?                              // Các lựa chọn A, B, C, D hoặc dữ liệu nối cặp
+  correctAnswer Json            @map("correct_answer")
+  explanation   String?         @db.Text
+  tags          String[]        @default([])
+  
+  gradeId       String?         @map("grade_id")
+  topicId       String?         @map("topic_id")
+  lessonId      String?         @map("lesson_id")
+  createdById   String?         @map("created_by_id")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Quan hệ
+  grade         Grade?         @relation(fields: [gradeId], references: [id], onDelete: SetNull)
+  topic         Topic?         @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  lesson        Lesson?        @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  createdBy     User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  examQuestions ExamQuestion[]
+
+  @@index([type])
+  @@index([skill])
+  @@map("questions")
+}
+
+model Exam {
+  id              String    @id @default(uuid())
+  title           String
+  type            ExamType
+  durationMinutes Int       @map("duration_minutes")
+  totalScore      Decimal   @default(10.0) @map("total_score") @db.Decimal(4, 2)
+  matrixBlueprint Json?     @map("matrix_blueprint")
+  gradeId         String    @map("grade_id")
+  topicId         String?   @map("topic_id")
+  createdById     String    @map("created_by_id")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Quan hệ
+  grade         Grade          @relation(fields: [gradeId], references: [id])
+  topic         Topic?         @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  createdBy     User           @relation(fields: [createdById], references: [id])
+  examQuestions ExamQuestion[]
+
+  @@map("exams")
+}
+
+model ExamQuestion {
+  id            String  @id @default(uuid())
+  examId        String  @map("exam_id")
+  questionId    String  @map("question_id")
+  questionOrder Int     @map("question_order")
+  pointWeight   Decimal @default(1.0) @map("point_weight") @db.Decimal(4, 2)
+
+  exam     Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, questionId])
+  @@index([examId, questionOrder])
+  @@map("exam_questions")
+}
+
+model Resource {
+  id         String     @id @default(uuid())
+  fileName   String     @map("file_name")
+  format     String
+  fileSize   BigInt     @map("file_size")
+  storageUrl String     @map("storage_url")
+  tags       Json?
+  scope      ShareScope @default(INTERNAL)
+  ownerId    String     @map("owner_id")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Quan hệ
+  owner           User             @relation(fields: [ownerId], references: [id])
+  lessonResources LessonResource[]
+
+  @@index([scope])
+  @@map("resources")
+}
+
+model LessonResource {
+  id         String   @id @default(uuid())
+  lessonId   String   @map("lesson_id")
+  resourceId String   @map("resource_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  lesson   Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, resourceId])
+  @@map("lesson_resources")
+}
+
+model AIGenerationLog {
+  id               String       @id @default(uuid())
+  userId           String       @map("user_id")
+  taskType         String       @map("task_type")
+  modelName        String       @map("model_name")
+  prompt           String       @db.Text
+  responsePayload  Json?        @map("response_payload")
+  status           AITaskStatus
+  errorMessage     String?      @map("error_message") @db.Text
+  promptTokens     Int?         @map("prompt_tokens")
+  completionTokens Int?         @map("completion_tokens")
+  totalTokens      Int?         @map("total_tokens")
+  retryCount       Int          @default(0) @map("retry_count")
+  executionTime    Int?         @map("execution_time")
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([taskType])
+  @@map("ai_generation_logs")
+}
